@@ -1,0 +1,238 @@
+name: CacheScope CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight run of the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The headless build must work on a stock runner with no package manager, no
+  # Ninja and no developer shell. That is the configuration most people will
+  # actually use, so it is the one that gets the widest matrix.
+  # ---------------------------------------------------------------------------
+  headless:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 gcc
+            os: ubuntu-latest
+            exe: ""
+          - name: Linux x86_64 clang
+            os: ubuntu-latest
+            cxx: clang++
+            exe: ""
+          - name: Linux arm64 gcc
+            os: ubuntu-24.04-arm
+            exe: ""
+          - name: macOS arm64 clang
+            os: macos-latest
+            exe: ""
+          - name: Windows x86_64 msvc
+            os: windows-latest
+            exe: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select compiler
+        if: matrix.cxx != ''
+        shell: bash
+        run: echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake --preset headless-release
+
+      - name: Build
+        run: cmake --build --preset headless-release --parallel
+
+      - name: Test
+        run: ctest --preset headless-release
+
+      # Runners are shared, virtualized and noisy, so this is a functional check
+      # that the binary runs and writes every report format - not a measurement.
+      - name: Smoke run
+        shell: bash
+        run: |
+          ./build/headless-release/bin/cachescope_cli${{ matrix.exe }} \
+            --preset quick --max-mib 8 --samples 3 --sample-ms 2 \
+            --label "CI ${{ matrix.name }}" --out ci-results
+
+      - name: Verify every report format was produced
+        shell: bash
+        run: |
+          set -eu
+          for extension in html csv json md; do
+            count=$(find ci-results -name "*.${extension}" | wc -l)
+            if [ "$count" -lt 1 ]; then
+              echo "no .${extension} report was written"
+              exit 1
+            fi
+          done
+          # A report that silently contains no data points is a failure too.
+          rows=$(cat ci-results/*.csv | wc -l)
+          if [ "$rows" -lt 20 ]; then
+            echo "CSV report has only ${rows} lines"
+            exit 1
+          fi
+          echo "reports look well formed (${rows} CSV lines)"
+
+      - name: Comparison tool accepts its own output
+        shell: bash
+        run: |
+          ./build/headless-release/bin/cachescope_compare${{ matrix.exe }} \
+            --out ci-results/comparison.html ci-results
+          test -s ci-results/comparison.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cachescope-reports-${{ matrix.name }}
+          path: ci-results/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 32-bit builds. These catch size_t/uint64 assumptions that 64-bit builds hide.
+  # ---------------------------------------------------------------------------
+  windows-x86:
+    name: Windows 32-bit
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build-x86 -A Win32 -DCACHESCOPE_BUILD_GUI=OFF
+      - name: Build
+        run: cmake --build build-x86 --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build-x86 -C Release --output-on-failure
+      - name: Smoke run
+        run: .\build-x86\bin\cachescope_cli.exe --preset quick --max-mib 8 --samples 3 --sample-ms 2 --label "CI win32" --out ci-results-x86
+
+  linux-x86:
+    name: Linux 32-bit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install multilib toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib
+      - name: Configure
+        run: cmake --preset linux-x86
+      - name: Build
+        run: cmake --build --preset linux-x86 --parallel
+      - name: Test
+        run: ctest --preset linux-x86
+      - name: Smoke run
+        run: ./build/linux-x86/bin/cachescope_cli --preset quick --max-mib 8 --samples 3 --sample-ms 2 --label "CI linux32" --out ci-results-x86
+
+  # ---------------------------------------------------------------------------
+  # Warnings-as-errors on one configuration only, so a new compiler's fresh
+  # diagnostics cannot break every other job at once.
+  # ---------------------------------------------------------------------------
+  strict-warnings:
+    name: Warnings as errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build-strict -DCACHESCOPE_WERROR=ON -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-strict --parallel
+
+  # ---------------------------------------------------------------------------
+  # The optional GUI, which is the only part that needs vcpkg.
+  # ---------------------------------------------------------------------------
+  gui:
+    name: GUI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GUI system dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+
+          # GitHub's Ubuntu image prefers azure.archive.ubuntu.com through a
+          # mirror list. Use the HTTPS Ubuntu archive directly so an unhealthy
+          # Azure mirror cannot stall this job indefinitely.
+          sudo sed -i \
+            's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+
+          apt_options=(
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Dpkg::Lock::Timeout=60
+          )
+          sudo apt-get "${apt_options[@]}" update
+
+          # vcpkg builds libxcrypt through vcpkg-make, whose port requires GNU autotools.
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get "${apt_options[@]}" install -y --no-install-recommends \
+            autoconf autoconf-archive automake build-essential libltdl-dev libtool pkg-config \
+            libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxext-dev libxft-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev \
+            libxkbcommon-dev wayland-protocols libegl1-mesa-dev libibus-1.0-dev \
+            libasound2-dev libpulse-dev libudev-dev
+
+      # The hosted runners ship a vcpkg checkout already; use it instead of
+      # cloning, and cache the built packages so later runs take seconds.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: build-gui/vcpkg_installed
+          key: vcpkg-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build-gui \
+            -DCACHESCOPE_BUILD_GUI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build-gui --config Release --parallel
+
+      - name: Test core in the GUI configuration
+        run: ctest --test-dir build-gui -C Release --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Tagged releases get ready-to-run binaries, so nobody has to build CacheScope
+  # just to contribute a measurement from their machine.
+  # ---------------------------------------------------------------------------
+  package:
+    name: Package ${{ matrix.os }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [headless]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset headless-release
+      - run: cmake --build --preset headless-release --parallel
+      - name: Package
+        run: cpack --config build/headless-release/CPackConfig.cmake -B build/headless-release/package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cachescope-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            build/headless-release/package/*.zip
+            build/headless-release/package/*.tar.gz
+          if-no-files-found: error

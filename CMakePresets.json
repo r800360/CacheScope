@@ -1,0 +1,162 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CACHESCOPE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "headless-release",
+      "inherits": "base",
+      "displayName": "Release, headless (no third-party dependencies)",
+      "description": "Uses the platform default generator, so it works in a plain shell on any OS.",
+      "cacheVariables": {
+        "CACHESCOPE_BUILD_GUI": "OFF"
+      }
+    },
+    {
+      "name": "headless-debug",
+      "inherits": "headless-release",
+      "displayName": "Debug, headless (for development only)",
+      "description": "Do not benchmark with this: unoptimized timings are meaningless.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release + Dear ImGui GUI (requires vcpkg)",
+      "description": "Needs VCPKG_ROOT to point at a vcpkg checkout.",
+      "cacheVariables": {
+        "CACHESCOPE_BUILD_GUI": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      },
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{VCPKG_ROOT}",
+        "rhs": ""
+      }
+    },
+    {
+      "name": "ninja-release",
+      "inherits": "headless-release",
+      "displayName": "Release, headless, Ninja",
+      "description": "Faster builds. Needs ninja on PATH, and on Windows a Developer shell.",
+      "generator": "Ninja"
+    },
+    {
+      "name": "windows-x86",
+      "inherits": "base",
+      "displayName": "Release, headless, 32-bit Windows",
+      "description": "Uses whichever Visual Studio generator is the default, so it is not pinned to one VS version.",
+      "architecture": "Win32",
+      "cacheVariables": {
+        "CACHESCOPE_BUILD_GUI": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-x86",
+      "inherits": "headless-release",
+      "displayName": "Release, headless, 32-bit Linux (needs g++-multilib)",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-m32",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "headless-release",
+      "configurePreset": "headless-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "headless-debug",
+      "configurePreset": "headless-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release"
+    },
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-x86",
+      "configurePreset": "windows-x86",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-x86",
+      "configurePreset": "linux-x86",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "headless-release",
+      "configurePreset": "headless-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x86",
+      "configurePreset": "windows-x86",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-x86",
+      "configurePreset": "linux-x86",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

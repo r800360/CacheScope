@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "cachescope",
+  "version-semver": "1.1.0",
+  "description": "Portable C++23 CPU cache characterization suite",
+  "features": {
+    "gui": {
+      "description": "Dear ImGui GUI using SDL3 and OpenGL3",
+      "dependencies": [
+        {
+          "name": "imgui",
+          "features": [
+            "sdl3-binding",
+            "opengl3-binding"
+          ]
+        },
+        "sdl3"
+      ]
+    }
+  }
+}

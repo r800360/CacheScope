@@ -1,0 +1,21 @@
+# Build directories
+/build*/
+/out/
+CMakeUserPresets.json
+
+# vcpkg
+vcpkg_installed/
+
+# Benchmark output
+/results/
+/ci-results*/
+*.html
+!docs/*.html
+
+# Editor / OS
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+.DS_Store
